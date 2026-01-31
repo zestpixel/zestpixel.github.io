@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Grid Pro By ZestPixel</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --primary: #00ff88;
+            --bg: #111;
+            --surface: #222;
+        }
+        body { margin: 0; background: var(--bg); color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow-x: hidden; }
+        #topbar {
+            position: fixed; top: 0; left: 0; right: 0; height: 65px;
+            background: rgba(0,0,0,0.9); display: flex; align-items: center;
+            padding: 0 20px; z-index: 100; border-bottom: 1px solid #333;
+            gap: 15px;
+        }
+        .btn {
+            background: var(--surface); color: white; border: 1px solid #444;
+            padding: 8px 16px; font-weight: bold; cursor: pointer; border-radius: 4px;
+            transition: all 0.2s;
+        }
+        .btn:hover { background: #333; border-color: #666; }
+        #exportBtn { background: var(--primary); color: #000; border: none; }
+        #exportBtn:hover { background: #00cc6e; transform: translateY(-1px); }
+        #exportBtn:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .select {
+            background: var(--surface);
+            color: white;
+            border: 1px solid #444;
+            padding: 8px 12px;
+            font-weight: bold;
+            border-radius: 4px;
+            outline: none;
+        }
+        .select:focus { border-color: #666; }
+        #container {
+            margin-top: 80px; padding: 20px;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        canvas {
+            border: 2px solid #333;
+            max-width: 95vw;
+            height: auto;
+            background-image: linear-gradient(45deg, #1a1a1a 25%, transparent 25%),
+                              linear-gradient(-45deg, #1a1a1a 25%, transparent 25%),
+                              linear-gradient(45deg, transparent 75%, #1a1a1a 75%),
+                              linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+            background-size: 20px 20px;
+            cursor: crosshair;
+        }
+        #dropzone {
+            position: fixed; inset: 0; background: rgba(0,255,136,0.2);
+            display: none; align-items: center; justify-content: center;
+            font-size: 30px; font-weight: bold; pointer-events: none;
+            z-index: 1000; border: 4px dashed var(--primary);
+        }
+        .info { margin-top: 10px; color: #888; font-size: 13px; }
+    </style>
+</head>
+<body>
+<div id="topbar">
+    <input type="file" id="upload" accept="image/*" style="display:none">
+    <button class="btn" onclick="document.getElementById('upload').click()">+ LOAD IMAGE</button>
+    <select id="layoutSelect" class="select" title="Grid layout">
+        <option value="1x2">1x2 (2 Cells - Horizontal Split)</option> <option value="2x1">2x1 (2 Cells - Vertical Split)</option> <option value="2x2">2x2 (4 Cells)</option>
+        <option value="2x3">2x3 (6 Cells - Vertical)</option>
+        <option value="3x3" selected>3x3 (9 Cells - Standard)</option>
+        <option value="3x4">3x4 (12 Cells - Tall)</option>
+    </select>
+    <button class="btn" id="resetBtn">RESET GRID</button>
+    <div style="flex-grow: 1;"></div>
+    <button class="btn" id="exportBtn" disabled>EXPORT ZIP (PNG)</button>
+</div>
+
+<div id="container">
+    <canvas id="canvas"></canvas>
+    <div class="info">Tip: Drag green lines to resize cells | Original resolution preserved</div>
+</div>
+
+<div id="dropzone">DROP IMAGE TO START</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const upload = document.getElementById("upload");
+const exportBtn = document.getElementById("exportBtn");
+const resetBtn = document.getElementById("resetBtn");
+const dropzone = document.getElementById("dropzone");
+const layoutSelect = document.getElementById("layoutSelect");
+
+let img = new Image();
+let rows = 3;
+let cols = 3;
+// Split positions (fraction 0..1)
+let v = [0.333, 0.666]; // vertical lines (cols-1)
+let h = [0.333, 0.666]; // horizontal lines (rows-1)
+let dragIdx = null;
+let dragType = null; // 'v' or 'h'
+
+function fractions(count) {
+    // Generate evenly spaced fractions for internal lines
+    const arr = [];
+    if (count <= 0) return arr;
+    const parts = count + 1;
+    for (let i = 1; i <= count; i++) arr.push(i / parts);
+    return arr;
+}
+
+const LAYOUTS = {
+    "1x2": { rows: 1, cols: 2 }, // Horizontal Split (1 vertical line)
+    "2x1": { rows: 2, cols: 1 }, // Vertical Split (1 horizontal line)
+    "2x2": { rows: 2, cols: 2 },
+    "2x3": { rows: 3, cols: 2 },
+    "3x3": { rows: 3, cols: 3 },
+    "3x4": { rows: 4, cols: 3 }
+};
+
+function applyLayout(key) {
+    const cfg = LAYOUTS[key] || LAYOUTS["3x3"];
+    rows = cfg.rows;
+    cols = cfg.cols;
+    
+    // Reset lines based on new row/col counts
+    v = fractions(cols - 1);
+    h = fractions(rows - 1);
+    
+    draw();
+}
+
+function getMousePos(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+    const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+    return {
+        x: (clientX - rect.left) * (canvas.width / rect.width),
+        y: (clientY - rect.top) * (canvas.height / rect.height)
+    };
+}
+
+function draw() {
+    if (!img.src) return;
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    
+    const drawLine = (pos, isVertical) => {
+        ctx.beginPath();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "lime";
+        ctx.setLineDash([]);
+        
+        if (isVertical) {
+            ctx.moveTo(pos * canvas.width, 0);
+            ctx.lineTo(pos * canvas.width, canvas.height);
+        } else {
+            ctx.moveTo(0, pos * canvas.height);
+            ctx.lineTo(canvas.width, pos * canvas.height);
+        }
+        ctx.stroke();
+        
+        // hit area glow
+        ctx.beginPath();
+        ctx.lineWidth = 20;
+        ctx.strokeStyle = "rgba(0, 255, 136, 0.1)";
+        
+        if (isVertical) {
+            ctx.moveTo(pos * canvas.width, 0);
+            ctx.lineTo(pos * canvas.width, canvas.height);
+        } else {
+            ctx.moveTo(0, pos * canvas.height);
+            ctx.lineTo(canvas.width, pos * canvas.height);
+        }
+        ctx.stroke();
+    };
+
+    v.forEach(pos => drawLine(pos, true));
+    h.forEach(pos => drawLine(pos, false));
+}
+
+function loadImage(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        img.src = e.target.result;
+        img.onload = () => {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            exportBtn.disabled = false;
+            applyLayout(layoutSelect.value);
+            draw();
+        };
+    };
+    reader.readAsDataURL(file);
+}
+
+// Event Listeners
+upload.onchange = e => loadImage(e.target.files[0]);
+
+layoutSelect.onchange = () => {
+    applyLayout(layoutSelect.value);
+};
+
+resetBtn.onclick = () => {
+    applyLayout(layoutSelect.value);
+};
+
+const startDrag = e => {
+    if (!img.src) return;
+    const {x, y} = getMousePos(e);
+    const threshold = 20 * (canvas.width / canvas.getBoundingClientRect().width);
+    
+    dragIdx = null;
+    dragType = null;
+    
+    // Check vertical lines first
+    v.forEach((pos, i) => {
+        if (Math.abs(x - pos * canvas.width) < threshold) {
+            dragIdx = i; dragType = 'v';
+        }
+    });
+    
+    // Check horizontal lines if not dragging vertical
+    if (dragIdx === null) {
+        h.forEach((pos, i) => {
+            if (Math.abs(y - pos * canvas.height) < threshold) {
+                dragIdx = i; dragType = 'h';
+            }
+        });
+    }
+};
+
+const doDrag = e => {
+    if (!img.src) return;
+    const {x, y} = getMousePos(e);
+    const threshold = 15 * (canvas.width / canvas.getBoundingClientRect().width);
+    
+    // Cursor UI
+    let hovering = false;
+    v.forEach(pos => {
+        if (Math.abs(x - pos * canvas.width) < threshold) {
+            canvas.style.cursor = 'col-resize'; hovering = true;
+        }
+    });
+    h.forEach(pos => {
+        if (Math.abs(y - pos * canvas.height) < threshold) {
+            canvas.style.cursor = 'row-resize'; hovering = true;
+        }
+    });
+    
+    if (!hovering && !dragType) canvas.style.cursor = 'crosshair';
+    
+    if (dragIdx === null) return;
+    e.preventDefault();
+    
+    if (dragType === 'v') v[dragIdx] = Math.max(0, Math.min(1, x / canvas.width));
+    else h[dragIdx] = Math.max(0, Math.min(1, y / canvas.height));
+    
+    draw();
+};
+
+canvas.onmousedown = startDrag;
+window.onmousemove = doDrag;
+window.onmouseup = () => { dragIdx = null; dragType = null; };
+
+// Touch Support
+canvas.ontouchstart = startDrag;
+canvas.ontouchmove = doDrag;
+canvas.ontouchend = () => { dragIdx = null; dragType = null; };
+
+// Drag & Drop
+document.body.ondragover = e => { e.preventDefault(); dropzone.style.display = "flex"; };
+document.body.ondragleave = e => { dropzone.style.display = "none"; };
+document.body.ondrop = e => {
+    e.preventDefault();
+    dropzone.style.display = "none";
+    loadImage(e.dataTransfer.files[0]);
+};
+
+exportBtn.onclick = async () => {
+    if (!img.src) return;
+    
+    exportBtn.innerText = "PROCESSING...";
+    exportBtn.disabled = true;
+    
+    const zip = new JSZip();
+    const folderName = `Grid_Export_${rows}x${cols}_${Date.now()}`;
+    const folder = zip.folder(folderName);
+    
+    // Sort lines to ensure correct slicing order
+    const finalV = [0, ...v, 1].sort((a, b) => a - b);
+    const finalH = [0, ...h, 1].sort((a, b) => a - b);
+    
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const sx = finalV[c] * img.width;
+            const sy = finalH[r] * img.height;
+            const sw = (finalV[c+1] - finalV[c]) * img.width;
+            const sh = (finalH[r+1] - finalH[r]) * img.height;
+            
+            if (sw <= 1 || sh <= 1) continue;
+            
+            const temp = document.createElement("canvas");
+            temp.width = Math.round(sw);
+            temp.height = Math.round(sh);
+            const tCtx = temp.getContext("2d");
+            
+            tCtx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+            
+            const blob = await new Promise(res => temp.toBlob(res, 'image/png'));
+            // Filename: r01_c01.png
+            folder.file(`r${String(r+1).padStart(2,'0')}_c${String(c+1).padStart(2,'0')}.png`, blob);
+        }
+    }
+    
+    const content = await zip.generateAsync({type: "blob"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(content);
+    a.download = `${folderName}.zip`;
+    a.click();
+    
+    exportBtn.innerText = "EXPORT ZIP (PNG)";
+    exportBtn.disabled = false;
+};
+</script>
+</body>
+</html>
